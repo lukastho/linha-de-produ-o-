@@ -105,10 +105,6 @@ export default function Login({ dados, entrar }) {
           </button>
         ))}
       </div>
-
-      <p className="mt-5 text-xs text-zinc-500">
-        Gestão: matrícula {ADMIN_MATRICULA} com o chassi {ADMIN_CHASSI}, depois a senha da conta.
-      </p>
     </div>
   );
 }
