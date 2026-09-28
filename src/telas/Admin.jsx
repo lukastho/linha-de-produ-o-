@@ -430,14 +430,29 @@ function Linha({ dados, recarregar, mostrar }) {
 
   const etapa = dados.etapas.find((e) => e.id === abertaId);
 
+  // No celular as tarefas ficam abaixo das etapas: rola até elas ao abrir uma etapa.
+  function abrirEtapa(id) {
+    setAbertaId(id);
+    if (window.innerWidth < 1024) {
+      setTimeout(() => document.getElementById("painel-tarefas")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+    }
+  }
+
   async function addEtapa() {
     if (!nEtapa.nome.trim()) return setErro("Dê um nome à etapa.");
-    const ok = await rodar(() => api.etapas.criar({
-      nome: nEtapa.nome.trim(),
-      cargo_responsavel_id: nEtapa.cargo_responsavel_id || null,
-      ordem: dados.etapas.length + 1,
-    }), "Etapa criada");
-    if (ok) setNEtapa({ nome: "", cargo_responsavel_id: dados.cargos[0]?.id ?? "" });
+    let criada = null;
+    const ok = await rodar(async () => {
+      criada = await api.etapas.criar({
+        nome: nEtapa.nome.trim(),
+        cargo_responsavel_id: nEtapa.cargo_responsavel_id || null,
+        ordem: dados.etapas.length + 1,
+      });
+    }, "Etapa criada");
+    if (ok) {
+      setNEtapa({ nome: "", cargo_responsavel_id: dados.cargos[0]?.id ?? "" });
+      // abre a etapa recém-criada, em vez de continuar mostrando as tarefas da anterior
+      if (criada?.id) abrirEtapa(criada.id);
+    }
   }
 
   async function addTarefa() {
@@ -462,8 +477,8 @@ function Linha({ dados, recarregar, mostrar }) {
   };
 
   return (
-    <div className="grid grid-cols-2 gap-6">
-      <div>
+    <div className="grid grid-cols-1 gap-8 lg:grid-cols-2 lg:gap-6">
+      <div className="min-w-0">
         <h2 className="text-xs uppercase tracking-widest text-zinc-500">Etapas</h2>
         <div className="mt-3">
           {dados.etapas.length === 0 && (
@@ -474,20 +489,22 @@ function Linha({ dados, recarregar, mostrar }) {
           {dados.etapas.map((e, i) => (
             <div key={e.id} className={"mb-2 rounded-lg border-2 bg-white px-3 py-2 " +
               (e.id === abertaId ? "border-emerald-600" : "border-zinc-300")}>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="font-mono text-sm text-zinc-400">{e.ordem}</span>
                 <input defaultValue={e.nome} disabled={ocupado}
                   onBlur={(ev) => ev.target.value !== e.nome && rodar(() => api.etapas.atualizar(e.id, { nome: ev.target.value }))}
-                  className="flex-1 bg-transparent py-1 outline-none" />
-                <button onClick={() => trocar(dados.etapas, i, -1, "etapas")} className="px-2 text-zinc-500">↑</button>
-                <button onClick={() => trocar(dados.etapas, i, 1, "etapas")} className="px-2 text-zinc-500">↓</button>
-                <button onClick={() => setAbertaId(e.id)} className="rounded border border-zinc-300 px-3 py-1 text-sm">
-                  {e.tarefas.length} tarefas
-                </button>
-                <button onClick={() => rodar(() => api.etapas.excluir(e.id), "Etapa excluída")}
-                  className="px-2 text-red-600">×</button>
+                  className="min-w-0 flex-1 bg-transparent py-1 outline-none" />
+                <div className="flex items-center gap-1">
+                  <button onClick={() => trocar(dados.etapas, i, -1, "etapas")} className="px-2 py-1 text-zinc-500">↑</button>
+                  <button onClick={() => trocar(dados.etapas, i, 1, "etapas")} className="px-2 py-1 text-zinc-500">↓</button>
+                  <button onClick={() => abrirEtapa(e.id)} className="rounded border border-zinc-300 px-3 py-1 text-sm">
+                    {e.tarefas.length} tarefas
+                  </button>
+                  <button onClick={() => rodar(() => api.etapas.excluir(e.id), "Etapa excluída")}
+                    className="px-2 py-1 text-red-600">×</button>
+                </div>
               </div>
-              <div className="mt-2 flex items-center gap-2">
+              <div className="mt-2 flex flex-wrap items-center gap-2">
                 <span className="text-xs text-zinc-500">Cargo predominante</span>
                 <select value={e.cargo_responsavel_id ?? ""} disabled={ocupado}
                   onChange={(ev) => rodar(() => api.etapas.atualizar(e.id, { cargo_responsavel_id: ev.target.value || null }))}
@@ -499,11 +516,11 @@ function Linha({ dados, recarregar, mostrar }) {
           ))}
         </div>
 
-        <div className="mt-3 flex gap-2">
+        <div className="mt-3 flex flex-wrap gap-2">
           <Campo value={nEtapa.nome} onChange={(e) => setNEtapa({ ...nEtapa, nome: e.target.value })}
-            placeholder="Nome da nova etapa" className="flex-1 py-2" />
+            placeholder="Nome da nova etapa" className="w-full py-2 sm:w-auto sm:flex-1" />
           <select value={nEtapa.cargo_responsavel_id} onChange={(e) => setNEtapa({ ...nEtapa, cargo_responsavel_id: e.target.value })}
-            className="rounded-lg border-2 border-zinc-300 px-2 py-2 text-sm">
+            className="min-w-0 flex-1 rounded-lg border-2 border-zinc-300 px-2 py-2 text-sm sm:flex-none">
             {dados.cargos.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
           </select>
           <Botao onClick={addEtapa} disabled={ocupado} className="px-4 py-2">Adicionar</Botao>
@@ -511,7 +528,7 @@ function Linha({ dados, recarregar, mostrar }) {
         <Erro>{erro}</Erro>
       </div>
 
-      <div>
+      <div id="painel-tarefas" className="min-w-0 scroll-mt-4">
         <h2 className="text-xs uppercase tracking-widest text-zinc-500">
           Tarefas — {etapa?.nome ?? "crie ou selecione uma etapa"}
         </h2>
@@ -529,13 +546,13 @@ function Linha({ dados, recarregar, mostrar }) {
                     <span className="font-mono text-sm text-zinc-400">{t.ordem}</span>
                     <input defaultValue={t.descricao} disabled={ocupado}
                       onBlur={(ev) => ev.target.value !== t.descricao && rodar(() => api.tarefas.atualizar(t.id, { descricao: ev.target.value }))}
-                      className="flex-1 bg-transparent py-1 outline-none" />
-                    <button onClick={() => trocar(etapa.tarefas, i, -1, "tarefas")} className="px-1 text-zinc-500">↑</button>
-                    <button onClick={() => trocar(etapa.tarefas, i, 1, "tarefas")} className="px-1 text-zinc-500">↓</button>
+                      className="min-w-0 flex-1 bg-transparent py-1 outline-none" />
+                    <button onClick={() => trocar(etapa.tarefas, i, -1, "tarefas")} className="px-2 py-1 text-zinc-500">↑</button>
+                    <button onClick={() => trocar(etapa.tarefas, i, 1, "tarefas")} className="px-2 py-1 text-zinc-500">↓</button>
                     <button onClick={() => rodar(() => api.tarefas.excluir(t.id), "Tarefa excluída")}
-                      className="px-1 text-red-600">×</button>
+                      className="px-2 py-1 text-red-600">×</button>
                   </div>
-                  <div className="mt-2 flex items-center gap-2">
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
                     <select value={t.cargo_responsavel_id} disabled={ocupado}
                       onChange={(ev) => rodar(() => api.tarefas.atualizar(t.id, { cargo_responsavel_id: ev.target.value }))}
                       className="rounded border border-zinc-300 px-2 py-1 text-xs">
