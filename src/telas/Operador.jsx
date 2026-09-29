@@ -10,6 +10,7 @@ export default function Operador({ sessao, dados, recarregar, naFila, setNaFila,
   const [modo, setModo] = useState("imediato");
   const [soMinhas, setSoMinhas] = useState(false);
   const [ocupada, setOcupada] = useState(null);
+  const [seletorAberto, setSeletorAberto] = useState(false);
   const [erro, setErro] = useState("");
 
   const caminhao = dados.caminhoes.find((c) => c.id === sessao.caminhao_id);
@@ -113,7 +114,7 @@ export default function Operador({ sessao, dados, recarregar, naFila, setNaFila,
     <div>
       <div className="bg-white px-5 py-4">
         <div className="flex flex-wrap items-start gap-4">
-          <Foto src={modelo?.imagem_url} alt={modelo?.nome ?? caminhao.chassi} className="h-24 w-40 rounded-lg" />
+          <Foto src={modelo?.imagem_url} alt={modelo?.nome ?? caminhao.chassi} className="h-16 w-24 shrink-0 rounded-lg sm:h-24 sm:w-40" />
           <div className="min-w-0 flex-1">
             <span className="text-xs uppercase tracking-widest text-zinc-500">Coletor em produção</span>
             <div className="text-xl font-medium">{modelo?.nome ?? "Modelo não cadastrado"}</div>
@@ -123,7 +124,7 @@ export default function Operador({ sessao, dados, recarregar, naFila, setNaFila,
             {modelo?.capacidade && <div className="text-xs text-zinc-500">Capacidade {modelo.capacidade}</div>}
           </div>
           {etapa && minhasNaEtapa.length > 0 && (
-            <div className="text-right">
+            <div className="hidden text-right sm:block">
               <div className="text-3xl font-medium">{minhasFeitas}<span className="text-zinc-400">/{minhasNaEtapa.length}</span></div>
               <div className="text-xs uppercase tracking-widest text-zinc-500">suas nesta etapa</div>
             </div>
@@ -144,8 +145,25 @@ export default function Operador({ sessao, dados, recarregar, naFila, setNaFila,
 
       {etapas?.length > 0 && (
         <>
-          {/* abas de etapas */}
-          <div className="flex gap-1 overflow-x-auto border-b-2 border-zinc-300 bg-white px-3">
+          {/* celular: um botão com a etapa aberta; tocar abre a janela com todas */}
+          <div className="border-b-2 border-zinc-300 bg-white px-4 py-3 sm:hidden">
+            <button onClick={() => setSeletorAberto(true)}
+              className="flex w-full items-center gap-3 rounded-lg border-2 border-zinc-300 px-4 py-3 text-left">
+              <div className="min-w-0 flex-1">
+                <div className="text-xs uppercase tracking-widest text-zinc-500">
+                  Etapa {etapas.findIndex((e) => e.id === abertaId) + 1} de {etapas.length}
+                </div>
+                <div className="truncate font-medium">{etapa?.nome}</div>
+                <div className="text-xs text-zinc-500">
+                  {etapa ? `${etapa.tarefas.filter(feita).length}/${etapa.tarefas.length} concluídas` : ""} · toque para trocar
+                </div>
+              </div>
+              <span className="text-xl text-zinc-400" aria-hidden="true">▾</span>
+            </button>
+          </div>
+
+          {/* tablet e computador: abas */}
+          <div className="hidden gap-1 overflow-x-auto border-b-2 border-zinc-300 bg-white px-3 sm:flex">
             {etapas.map((e) => {
               const total = e.tarefas.length;
               const ok = e.tarefas.filter(feita).length;
@@ -166,6 +184,13 @@ export default function Operador({ sessao, dados, recarregar, naFila, setNaFila,
               );
             })}
           </div>
+
+          {seletorAberto && (
+            <SeletorEtapas etapas={etapas} abertaId={abertaId} etapaAtualId={caminhao.etapa_atual_id}
+              feita={feita} minha={minha}
+              escolher={(id) => { setAbertaId(id); setSeletorAberto(false); window.scrollTo({ top: 0 }); }}
+              fechar={() => setSeletorAberto(false)} />
+          )}
 
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-300 bg-zinc-50 px-5 py-3">
             <button onClick={() => setSoMinhas(!soMinhas)}
@@ -220,6 +245,62 @@ export default function Operador({ sessao, dados, recarregar, naFila, setNaFila,
           )}
         </>
       )}
+    </div>
+  );
+}
+
+// Janela que sobe de baixo no celular, com todas as etapas do coletor.
+function SeletorEtapas({ etapas, abertaId, etapaAtualId, feita, minha, escolher, fechar }) {
+  useEffect(() => {
+    const esc = (e) => e.key === "Escape" && fechar();
+    document.addEventListener("keydown", esc);
+    document.body.style.overflow = "hidden";           // não rola a página por trás
+    return () => { document.removeEventListener("keydown", esc); document.body.style.overflow = ""; };
+  }, [fechar]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end bg-black bg-opacity-50" onClick={fechar}
+      role="dialog" aria-modal="true" aria-label="Escolher etapa">
+      <div className="max-h-[85vh] w-full overflow-y-auto rounded-t-2xl bg-white px-4 pt-3"
+        style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}
+        onClick={(e) => e.stopPropagation()}>
+        <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-zinc-300" />
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-lg font-medium">Etapas deste coletor</h2>
+          <button onClick={fechar} className="rounded border border-zinc-300 px-3 py-2 text-sm">Fechar</button>
+        </div>
+        {etapas.map((e) => {
+          const total = e.tarefas.length;
+          const ok = e.tarefas.filter(feita).length;
+          const minhas = e.tarefas.filter(minha);
+          const pendentesMinhas = minhas.filter((t) => !feita(t)).length;
+          const aberta = e.id === abertaId;
+          const pct = total ? Math.round((ok / total) * 100) : 0;
+          return (
+            <button key={e.id} onClick={() => escolher(e.id)}
+              className={"mb-2 w-full rounded-lg border-2 px-4 py-3 text-left " +
+                (aberta ? "border-emerald-600 bg-emerald-50" : "border-zinc-300 bg-white")}>
+              <div className="flex items-start justify-between gap-3">
+                <span className="min-w-0 font-medium">{e.nome}</span>
+                <span className="shrink-0 text-sm text-zinc-600">{ok}/{total}</span>
+              </div>
+              <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-zinc-200">
+                <div className="h-2 rounded-full bg-emerald-600" style={{ width: pct + "%" }} />
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                {pendentesMinhas > 0 && (
+                  <span className="flex items-center gap-1 text-emerald-800">
+                    <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                    {pendentesMinhas} {pendentesMinhas === 1 ? "tarefa sua pendente" : "tarefas suas pendentes"}
+                  </span>
+                )}
+                {minhas.length === 0 && <span className="text-zinc-500">nenhuma tarefa do seu cargo</span>}
+                {e.id === etapaAtualId && <span className="text-zinc-500">· etapa atual</span>}
+              </div>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

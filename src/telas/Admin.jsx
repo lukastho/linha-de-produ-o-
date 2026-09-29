@@ -575,6 +575,25 @@ function Linha({ dados, padrao, recarregar, mostrar }) {
     rodar(() => reordenarPadrao("tarefas", ids), "Ordem atualizada");
   }
 
+  async function desativarAntiga(e) {
+    const ok = window.confirm(
+      `Desativar "${e.nome}"?\n\n` +
+      "Ela some da tela de todos os coletores. As marcações feitas nela continuam " +
+      "guardadas no histórico. Dá para reativar depois pelo banco.");
+    if (!ok) return;
+    await rodar(async () => {
+      await api.etapas.atualizar(e.id, { ativo: false });
+      // coletor que estava nessa etapa passa para a primeira etapa dele,
+      // em vez de ficar apontando para uma etapa invisível
+      for (const c of dados.caminhoes.filter((x) => x.etapa_atual_id === e.id)) {
+        const primeira = dados.etapas
+          .filter((x) => x.caminhao_id === c.id)
+          .sort((a, b) => a.ordem - b.ordem)[0];
+        await api.caminhoes.atualizar(c.id, { etapa_atual_id: primeira?.id ?? null });
+      }
+    }, `"${e.nome}" desativada`);
+  }
+
   async function aplicarATodos() {
     const ok = window.confirm(
       "Aplicar o padrão aos coletores já cadastrados?\n\n" +
@@ -686,7 +705,7 @@ function Linha({ dados, padrao, recarregar, mostrar }) {
               {antigas.map((e) => (
                 <div key={e.id} className="mt-2 flex items-center gap-3 rounded-lg border-2 border-zinc-200 bg-zinc-50 px-3 py-2">
                   <span className="min-w-0 flex-1 text-sm">{e.nome}</span>
-                  <button onClick={() => rodar(() => api.etapas.atualizar(e.id, { ativo: false }), "Etapa antiga desativada")}
+                  <button onClick={() => desativarAntiga(e)}
                     disabled={ocupado} className="rounded border border-zinc-300 px-3 py-1 text-sm">Desativar</button>
                 </div>
               ))}
