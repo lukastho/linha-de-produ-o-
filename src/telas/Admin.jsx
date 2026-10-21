@@ -1,12 +1,12 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   api, carregarRegistros, carregarPadrao, aplicarPadraoATodos, reordenarPadrao,
-  contarPadraoDoCaminhao, etapasDoCaminhao,
+  contarPadraoDoCaminhao, etapasDoCaminhao, ofDoCaminhao, carregarProgresso,
 } from "../lib/api.js";
 import Foto from "../componentes/Foto.jsx";
 
 export default function Admin({ dados, recarregar, mostrar }) {
-  const [aba, setAba] = useState("operadores");
+  const [aba, setAba] = useState("ordens");
   const [perfil, setPerfil] = useState(null);
   const [padrao, setPadrao] = useState(null);
 
@@ -27,7 +27,7 @@ export default function Admin({ dados, recarregar, mostrar }) {
   }, [recarregar, recarregarPadrao]);
 
   const abas = [
-    ["operadores", "Operadores"], ["cargos", "Cargos"], ["modelos", "Modelos"],
+    ["ordens", "Ordens de fabricação"], ["operadores", "Operadores"], ["cargos", "Cargos"], ["modelos", "Modelos"],
     ["coletores", "Coletores"], ["linha", "Padrão de fábrica"],
   ];
 
@@ -57,6 +57,7 @@ export default function Admin({ dados, recarregar, mostrar }) {
       </div>
 
       <div className="py-6">
+        {aba === "ordens" && <Ordens {...ctx} />}
         {aba === "operadores" && <Operadores {...ctx} abrirPerfil={setPerfil} />}
         {aba === "cargos" && <Cargos {...ctx} />}
         {aba === "modelos" && <Modelos {...ctx} />}
@@ -141,6 +142,7 @@ function Operadores({ dados, recarregar, mostrar, abrirPerfil }) {
       <div className="mt-5">
         {dados.usuarios.filter((u) => !u.e_admin).map((u) => {
           const s = sessaoDe(u.matricula);
+          const of = s ? ofDoCaminhao(dados, dados.caminhoes.find((c) => c.id === s.caminhao_id)) : null;
           return (
             <div key={u.id} className="mb-2 flex items-center gap-4 rounded-lg border-2 border-zinc-300 bg-white px-4 py-3">
               <span className="w-20 font-mono text-lg">{u.matricula}</span>
@@ -149,7 +151,8 @@ function Operadores({ dados, recarregar, mostrar, abrirPerfil }) {
                 {s ? (
                   <span className="flex items-center gap-2 text-xs text-emerald-800">
                     <span className="h-2 w-2 rounded-full bg-emerald-500" />
-                    na linha agora · chassi {s.chassi}
+                    na linha agora · chassi <span className="font-mono">{s.chassi}</span>
+                    {of && <> · OF <span className="font-mono">{of.numero}</span></>}
                   </span>
                 ) : (
                   <span className="text-xs text-zinc-400">fora da linha</span>
@@ -184,6 +187,7 @@ function Perfil({ operador, fechar, dados }) {
   const caminhao = sessao ? dados.caminhoes.find((c) => c.chassi === sessao.chassi) : null;
   const modelo = caminhao ? dados.modelos.find((m) => m.id === caminhao.modelo_id) : null;
   const etapa = caminhao ? dados.etapas.find((e) => e.id === caminhao.etapa_atual_id) : null;
+  const of = ofDoCaminhao(dados, caminhao);
 
   useEffect(() => {
     carregarRegistros()
@@ -215,6 +219,9 @@ function Perfil({ operador, fechar, dados }) {
                   <span className="text-xs uppercase tracking-widest text-emerald-800">Na linha agora</span>
                 </div>
                 <div className="mt-1 text-sm">{modelo?.nome} · <span className="font-mono">{sessao.chassi}</span></div>
+                <div className="text-sm text-zinc-600">
+                  {of ? <>OF <span className="font-mono">{of.numero}</span>{of.cliente ? ` · ${of.cliente}` : ""}</> : "Sem OF"}
+                </div>
                 <div className="text-sm text-zinc-600">Etapa atual do coletor: {etapa?.nome ?? "não definida"}</div>
               </div>
             </div>
@@ -380,10 +387,309 @@ function Modelos({ dados, recarregar, mostrar }) {
   );
 }
 
+// --- Ordens de fabricação (OF) ---------------------------------------
+
+const ROTULO_STATUS = { aberta: "Em produção", concluida: "Concluída", cancelada: "Cancelada" };
+const COR_STATUS = {
+  aberta: "bg-emerald-600 text-white",
+  concluida: "bg-zinc-900 text-zinc-50",
+  cancelada: "bg-zinc-200 text-zinc-600",
+};
+
+const dataBR = (d) => d ? new Date(d + "T12:00:00").toLocaleDateString("pt-BR") : null;
+
+function Barra({ feitas, total }) {
+  const pct = total ? Math.round((feitas / total) * 100) : 0;
+  return (
+    <div className="flex items-center gap-3">
+      <div className="h-2 flex-1 overflow-hidden rounded-full bg-zinc-200">
+        <div className="h-2 rounded-full bg-emerald-600" style={{ width: pct + "%" }} />
+      </div>
+      <span className="w-24 shrink-0 text-right text-xs text-zinc-600">{feitas}/{total} · {pct}%</span>
+    </div>
+  );
+}
+
+function Ordens({ dados, recarregar, mostrar }) {
+  const vazio = { numero: "", cliente: "", prazo: "", observacao: "" };
+  const [f, setF] = useState(vazio);
+  const [filtro, setFiltro] = useState("aberta");
+  const [abertaId, setAbertaId] = useState(null);
+  const [progresso, setProgresso] = useState({});
+  const { erro, setErro, ocupado, rodar } = useAcao(recarregar, mostrar);
+
+  // dados muda a cada recarregar(): aproveita para atualizar o andamento
+  useEffect(() => { carregarProgresso().then(setProgresso); }, [dados]);
+
+  if (!dados.ordensDisponiveis) {
+    return (
+      <div className="rounded-lg border-2 border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">
+        As ordens de fabricação ainda não estão ativas no banco. Rode a migração
+        <strong> 004_ordens_de_fabricacao.sql</strong> no SQL Editor do Supabase.
+      </div>
+    );
+  }
+
+  async function criar() {
+    if (!f.numero.trim()) return setErro("O número da OF é obrigatório.");
+    const ok = await rodar(() => api.ordens.criar({
+      numero: f.numero.trim(),
+      cliente: f.cliente.trim() || null,
+      prazo: f.prazo || null,
+      observacao: f.observacao.trim() || null,
+    }), `OF ${f.numero.trim()} criada`);
+    if (ok) setF(vazio);
+  }
+
+  const lista = dados.ordens.filter((o) => filtro === "todas" || o.status === filtro);
+  const coletoresDa = (of) => dados.caminhoes.filter((c) => c.of_id === of.id);
+
+  return (
+    <div>
+      <div className="rounded-lg border-2 border-zinc-300 bg-white p-4">
+        <h2 className="text-xs uppercase tracking-widest text-zinc-500">Nova ordem de fabricação</h2>
+        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <Campo value={f.numero} onChange={(e) => setF({ ...f, numero: e.target.value })}
+            placeholder="Número da OF" className="font-mono" />
+          <Campo value={f.cliente} onChange={(e) => setF({ ...f, cliente: e.target.value })} placeholder="Cliente" />
+          <label className="flex flex-col text-xs text-zinc-500">
+            Prazo de entrega
+            <Campo type="date" value={f.prazo} onChange={(e) => setF({ ...f, prazo: e.target.value })} className="mt-1 text-sm text-zinc-900" />
+          </label>
+          <Campo value={f.observacao} onChange={(e) => setF({ ...f, observacao: e.target.value })} placeholder="Observação (opcional)" />
+        </div>
+        <Erro>{erro}</Erro>
+        <Botao onClick={criar} disabled={ocupado} className="mt-3">Criar OF</Botao>
+      </div>
+
+      <div className="mt-5 flex flex-wrap gap-2">
+        {[["aberta", "Em produção"], ["concluida", "Concluídas"], ["cancelada", "Canceladas"], ["todas", "Todas"]].map(([id, rotulo]) => (
+          <button key={id} onClick={() => setFiltro(id)}
+            className={"rounded px-4 py-2 text-sm " + (filtro === id ? "bg-zinc-900 text-zinc-50" : "border border-zinc-300 bg-white text-zinc-600")}>
+            {rotulo} ({id === "todas" ? dados.ordens.length : dados.ordens.filter((o) => o.status === id).length})
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-4">
+        {lista.length === 0 && (
+          <p className="rounded-lg border-2 border-dashed border-zinc-300 px-4 py-10 text-center text-sm text-zinc-500">
+            {filtro === "todas" ? "Nenhuma OF cadastrada." : "Nenhuma OF neste filtro."}
+          </p>
+        )}
+        {lista.map((of) => (
+          <CartaoOF key={of.id} of={of} coletores={coletoresDa(of)} progresso={progresso}
+            aberta={abertaId === of.id} alternar={() => setAbertaId(abertaId === of.id ? null : of.id)}
+            dados={dados} recarregar={recarregar} mostrar={mostrar} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CartaoOF({ of, coletores, progresso, aberta, alternar, dados, recarregar, mostrar }) {
+  const [existente, setExistente] = useState("");
+  const [novo, setNovo] = useState({ chassi: "", modelo_id: dados.modelos[0]?.id ?? "" });
+  const [criando, setCriando] = useState(false);
+  const { erro, setErro, ocupado, rodar } = useAcao(recarregar, mostrar);
+
+  const soma = coletores.reduce((a, c) => {
+    const p = progresso[c.id];
+    return { feitas: a.feitas + (p?.concluidas ?? 0), total: a.total + (p?.total ?? 0) };
+  }, { feitas: 0, total: 0 });
+  const pronto = (c) => c.status === "concluido" ||
+    (progresso[c.id]?.total > 0 && progresso[c.id].concluidas === progresso[c.id].total);
+  const prontos = coletores.filter(pronto).length;
+  const hoje = new Date().toISOString().slice(0, 10);
+  const atrasada = of.status === "aberta" && of.prazo && of.prazo < hoje;
+  const naOutra = (c) => Boolean(c.of_id) && c.of_id !== of.id;
+  // primeiro os coletores sem OF, depois os que estão em outra OF
+  const disponiveis = dados.caminhoes
+    .filter((c) => c.of_id !== of.id)
+    .sort((a, b) => Number(naOutra(a)) - Number(naOutra(b)));
+
+  async function adicionarExistente() {
+    const c = dados.caminhoes.find((x) => x.id === existente);
+    if (!c) return setErro("Escolha um coletor.");
+    if (naOutra(c)) {
+      const atual = dados.ordens.find((o) => o.id === c.of_id);
+      if (!window.confirm(`O coletor ${c.chassi} está na OF ${atual?.numero}. Mover para a OF ${of.numero}?`)) return;
+    }
+    const ok = await rodar(() => api.caminhoes.atualizar(c.id, { of_id: of.id, os: of.numero }),
+      `Coletor ${c.chassi} adicionado à OF ${of.numero}`);
+    if (ok) setExistente("");
+  }
+
+  async function cadastrarNovo() {
+    if (!novo.chassi.trim()) return setErro("O chassi é obrigatório.");
+    setErro("");
+    setCriando(true);
+    try {
+      // o banco copia o padrão de fábrica no mesmo instante do cadastro (trigger)
+      const c = await api.caminhoes.criar({
+        chassi: novo.chassi.trim(), modelo_id: novo.modelo_id || null,
+        cliente: of.cliente ?? "", of_id: of.id, os: of.numero,
+      });
+      const qtd = await contarPadraoDoCaminhao(c.id);
+      await recarregar();
+      setNovo({ ...novo, chassi: "" });
+      mostrar(qtd.tarefas === 0
+        ? `Coletor ${c.chassi} cadastrado, mas SEM padrão. Confira o padrão de fábrica.`
+        : `Coletor ${c.chassi} cadastrado na OF ${of.numero} com ${qtd.tarefas} tarefas`);
+    } catch (e) {
+      setErro(e.message);
+    } finally {
+      setCriando(false);
+    }
+  }
+
+  function tirar(c) {
+    if (!window.confirm(`Tirar o coletor ${c.chassi} da OF ${of.numero}? O coletor e o checklist dele continuam.`)) return;
+    rodar(() => api.caminhoes.atualizar(c.id, { of_id: null, os: null }), `Coletor ${c.chassi} saiu da OF`);
+  }
+
+  function mudarStatus(status) {
+    const frase = { concluida: "Marcar a OF como concluída?", cancelada: "Cancelar esta OF?", aberta: "Reabrir esta OF?" }[status];
+    if (window.confirm(frase)) rodar(() => api.ordens.atualizar(of.id, { status }), `OF ${of.numero}: ${ROTULO_STATUS[status].toLowerCase()}`);
+  }
+
+  function excluir() {
+    if (window.confirm(`Excluir a OF ${of.numero}? Ela não tem coletores.`))
+      rodar(() => api.ordens.excluir(of.id), `OF ${of.numero} excluída`);
+  }
+
+  return (
+    <div className={"mb-3 rounded-lg border-2 bg-white " + (aberta ? "border-emerald-600" : "border-zinc-300")}>
+      <button onClick={alternar} className="w-full px-4 py-3 text-left">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-mono text-lg font-medium">OF {of.numero}</span>
+              <span className={"rounded px-2 py-1 text-xs uppercase tracking-widest " + COR_STATUS[of.status]}>
+                {ROTULO_STATUS[of.status]}
+              </span>
+              {atrasada && (
+                <span className="rounded bg-red-600 px-2 py-1 text-xs uppercase tracking-widest text-white">Atrasada</span>
+              )}
+            </div>
+            <div className="mt-1 text-sm text-zinc-600">
+              {of.cliente || "sem cliente"}
+              {of.prazo && <> · prazo {dataBR(of.prazo)}</>}
+              {" · "}pedido {dataBR(of.data_pedido)}
+            </div>
+          </div>
+          <div className="text-right text-sm">
+            <div className="font-medium">{coletores.length} {coletores.length === 1 ? "coletor" : "coletores"}</div>
+            <div className="text-xs text-zinc-500">{prontos} pronto{prontos === 1 ? "" : "s"}</div>
+          </div>
+        </div>
+        {coletores.length > 0 && <div className="mt-3"><Barra feitas={soma.feitas} total={soma.total} /></div>}
+      </button>
+
+      {aberta && (
+        <div className="border-t-2 border-zinc-200 px-4 py-4">
+          {of.observacao && <p className="mb-3 text-sm text-zinc-600">{of.observacao}</p>}
+
+          {coletores.length === 0 && (
+            <p className="rounded-lg border-2 border-dashed border-zinc-300 px-4 py-6 text-center text-sm text-zinc-500">
+              Nenhum coletor nesta OF ainda. Adicione abaixo.
+            </p>
+          )}
+
+          {coletores.map((c) => {
+            const m = dados.modelos.find((x) => x.id === c.modelo_id);
+            const etapa = dados.etapas.find((e) => e.id === c.etapa_atual_id);
+            const equipe = dados.sessoes.filter((s) => s.caminhao_id === c.id);
+            const p = progresso[c.id];
+            return (
+              <div key={c.id} className="mb-2 rounded-lg border border-zinc-300 px-3 py-3">
+                <div className="flex flex-wrap items-center gap-3">
+                  <Foto src={m?.imagem_url} alt={m?.nome ?? c.chassi} className="h-12 w-20 shrink-0 rounded" />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono">{c.chassi}</span>
+                      {pronto(c) && <span className="rounded border border-emerald-600 px-2 text-xs uppercase tracking-widest text-emerald-800">Pronto</span>}
+                    </div>
+                    <div className="text-xs text-zinc-500">{m?.nome ?? "sem modelo"} · etapa atual: {etapa?.nome ?? "—"}</div>
+                  </div>
+                  <button onClick={() => tirar(c)} disabled={ocupado}
+                    className="rounded border border-zinc-300 px-3 py-2 text-xs text-zinc-600">Tirar da OF</button>
+                </div>
+                <div className="mt-2"><Barra feitas={p?.concluidas ?? 0} total={p?.total ?? 0} /></div>
+                {equipe.length > 0 && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <span className="text-xs uppercase tracking-widest text-emerald-800">Na linha agora</span>
+                    {equipe.map((s) => (
+                      <span key={s.id} className="rounded bg-emerald-50 px-2 py-1 text-xs text-emerald-800">{s.nome}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {of.status === "aberta" && (
+            <div className="mt-4 grid gap-4 lg:grid-cols-2">
+              <div className="rounded-lg bg-zinc-50 p-3">
+                <h3 className="text-xs uppercase tracking-widest text-zinc-500">Cadastrar coletor novo nesta OF</h3>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <Campo value={novo.chassi} onChange={(e) => setNovo({ ...novo, chassi: e.target.value.toUpperCase() })}
+                    placeholder="Chassi" className="w-full font-mono sm:w-36" />
+                  <select value={novo.modelo_id} onChange={(e) => setNovo({ ...novo, modelo_id: e.target.value })}
+                    className="min-w-0 flex-1 rounded-lg border-2 border-zinc-300 px-3 py-3 outline-none">
+                    {dados.modelos.map((m) => <option key={m.id} value={m.id}>{m.nome}</option>)}
+                  </select>
+                </div>
+                <Botao onClick={cadastrarNovo} disabled={criando || ocupado} className="mt-2 w-full sm:w-auto">
+                  {criando ? "Cadastrando…" : "Cadastrar coletor"}
+                </Botao>
+              </div>
+              <div className="rounded-lg bg-zinc-50 p-3">
+                <h3 className="text-xs uppercase tracking-widest text-zinc-500">Adicionar coletor já cadastrado</h3>
+                <select value={existente} onChange={(e) => setExistente(e.target.value)}
+                  className="mt-2 w-full rounded-lg border-2 border-zinc-300 px-3 py-3 outline-none">
+                  <option value="">Escolha o coletor…</option>
+                  {disponiveis.map((c) => {
+                    const outra = naOutra(c) ? dados.ordens.find((o) => o.id === c.of_id) : null;
+                    return <option key={c.id} value={c.id}>{c.chassi}{outra ? ` (está na OF ${outra.numero})` : " (sem OF)"}</option>;
+                  })}
+                </select>
+                <Botao onClick={adicionarExistente} disabled={ocupado || !existente} className="mt-2 w-full sm:w-auto">Adicionar à OF</Botao>
+              </div>
+            </div>
+          )}
+
+          <Erro>{erro}</Erro>
+
+          <div className="mt-4 flex flex-wrap gap-2 border-t border-zinc-200 pt-3">
+            {of.status === "aberta" && (
+              <>
+                <button onClick={() => mudarStatus("concluida")} disabled={ocupado}
+                  className="rounded-lg bg-zinc-900 px-4 py-2 text-sm text-zinc-50">Marcar OF como concluída</button>
+                <button onClick={() => mudarStatus("cancelada")} disabled={ocupado}
+                  className="rounded border border-zinc-300 px-4 py-2 text-sm text-red-700">Cancelar OF</button>
+              </>
+            )}
+            {of.status !== "aberta" && (
+              <button onClick={() => mudarStatus("aberta")} disabled={ocupado}
+                className="rounded border border-zinc-300 px-4 py-2 text-sm">Reabrir OF</button>
+            )}
+            {coletores.length === 0 && (
+              <button onClick={excluir} disabled={ocupado}
+                className="rounded border border-zinc-300 px-4 py-2 text-sm text-red-700">Excluir OF</button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // --- Coletores -------------------------------------------------------
 
 function Coletores({ dados, padrao, recarregar, mostrar }) {
-  const vazio = { chassi: "", os: "", modelo_id: dados.modelos[0]?.id ?? "", cliente: "" };
+  const vazio = { chassi: "", os: "", of_id: "", modelo_id: dados.modelos[0]?.id ?? "", cliente: "" };
+  const ofsAbertas = dados.ordens.filter((o) => o.status === "aberta");
   const [f, setF] = useState(vazio);
   const [criando, setCriando] = useState(false);
   const { erro, setErro, ocupado, rodar } = useAcao(recarregar, mostrar);
@@ -395,7 +701,14 @@ function Coletores({ dados, padrao, recarregar, mostrar }) {
     try {
       // O banco copia o padrão de fábrica no mesmo instante do cadastro
       // (trigger). Quando o insert volta, etapas e tarefas já existem.
-      const novo = await api.caminhoes.criar({ ...f, chassi: f.chassi.trim() });
+      const { of_id, ...resto } = f;
+      const of = dados.ordens.find((o) => o.id === of_id);
+      const novo = await api.caminhoes.criar({
+        ...resto,
+        chassi: f.chassi.trim(),
+        ...(dados.ordensDisponiveis ? { of_id: of?.id ?? null, os: of?.numero ?? null } : {}),
+        cliente: f.cliente || of?.cliente || "",
+      });
       const qtd = await contarPadraoDoCaminhao(novo.id);
       await recarregar();
       setF(vazio);
@@ -430,7 +743,15 @@ function Coletores({ dados, padrao, recarregar, mostrar }) {
         <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <Campo value={f.chassi} onChange={(e) => setF({ ...f, chassi: e.target.value.toUpperCase() })}
             placeholder="Chassi" className="font-mono" />
-          <Campo value={f.os} onChange={(e) => setF({ ...f, os: e.target.value })} placeholder="OF / OS" className="font-mono" />
+          {dados.ordensDisponiveis ? (
+            <select value={f.of_id} onChange={(e) => setF({ ...f, of_id: e.target.value })}
+              className="rounded-lg border-2 border-zinc-300 px-3 py-3 outline-none">
+              <option value="">Sem OF</option>
+              {ofsAbertas.map((o) => <option key={o.id} value={o.id}>OF {o.numero}{o.cliente ? ` · ${o.cliente}` : ""}</option>)}
+            </select>
+          ) : (
+            <Campo value={f.os} onChange={(e) => setF({ ...f, os: e.target.value })} placeholder="OF / OS" className="font-mono" />
+          )}
           <select value={f.modelo_id} onChange={(e) => setF({ ...f, modelo_id: e.target.value })}
             className="rounded-lg border-2 border-zinc-300 px-3 py-3 outline-none">
             {dados.modelos.map((m) => <option key={m.id} value={m.id}>{m.nome}</option>)}
@@ -458,7 +779,7 @@ function Coletores({ dados, padrao, recarregar, mostrar }) {
                 <div className="min-w-0 flex-1">
                   <div className="font-mono text-lg">{c.chassi}</div>
                   <div className="text-sm">{m?.nome ?? "sem modelo"}</div>
-                  <div className="text-xs text-zinc-500">{c.cliente || "sem cliente"} · OF {c.os || "—"}</div>
+                  <div className="text-xs text-zinc-500">{c.cliente || "sem cliente"} · OF {ofDoCaminhao(dados, c)?.numero ?? "—"}</div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <label className="text-xs text-zinc-500">Etapa atual</label>

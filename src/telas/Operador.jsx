@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { carregarChecklist, statusDoCaminhao, registrar, sincronizarFila } from "../lib/api.js";
+import { carregarChecklist, statusDoCaminhao, registrar, sincronizarFila, ofDoCaminhao } from "../lib/api.js";
 import { uid, lerFila } from "../lib/fila.js";
 import Foto from "../componentes/Foto.jsx";
 
@@ -15,6 +15,7 @@ export default function Operador({ sessao, dados, recarregar, naFila, setNaFila,
 
   const caminhao = dados.caminhoes.find((c) => c.id === sessao.caminhao_id);
   const modelo = caminhao ? dados.modelos.find((m) => m.id === caminhao.modelo_id) : null;
+  const of = ofDoCaminhao(dados, caminhao);
 
   const atualizar = useCallback(async () => {
     if (!caminhao) return;
@@ -121,6 +122,11 @@ export default function Operador({ sessao, dados, recarregar, naFila, setNaFila,
             <div className="text-sm text-zinc-600">
               Chassi <span className="font-mono">{caminhao.chassi}</span> · {caminhao.cliente}
             </div>
+            {of && (
+              <div className="mt-1 inline-block rounded bg-zinc-900 px-2 py-1 font-mono text-xs text-zinc-50">
+                OF {of.numero}
+              </div>
+            )}
             {modelo?.capacidade && <div className="text-xs text-zinc-500">Capacidade {modelo.capacidade}</div>}
           </div>
           {etapa && minhasNaEtapa.length > 0 && (

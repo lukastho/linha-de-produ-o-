@@ -9,13 +9,14 @@ import { lerFila, enfileirar, removerDaFila } from "./fila.js";
 // seriam ~93 por coletor, e o Supabase corta em 1000 linhas sem avisar.
 // As tarefas vêm por caminhão, em carregarChecklist().
 export async function carregarCatalogo() {
-  const [cargos, modelos, etapas, caminhoes, usuarios, sessoes] = await Promise.all([
+  const [cargos, modelos, etapas, caminhoes, usuarios, sessoes, ordens] = await Promise.all([
     supabase.from("cargos").select("*").order("nome"),
     supabase.from("modelos").select("*").order("nome"),
     supabase.from("etapas").select("*").eq("ativo", true).order("ordem"),
     supabase.from("caminhoes").select("*").order("chassi"),
     supabase.from("v_usuarios_publico").select("*").order("matricula"),
     supabase.from("v_sessoes_ativas").select("*"),
+    carregarOrdens(),
   ]);
 
   const erro = [cargos, modelos, etapas, caminhoes, usuarios, sessoes].find((r) => r.error);
@@ -28,7 +29,35 @@ export async function carregarCatalogo() {
     usuarios: usuarios.data,
     sessoes: sessoes.data,
     etapas: etapas.data,
+    ordens: ordens ?? [],
+    // false enquanto a migração 004 não foi rodada no Supabase
+    ordensDisponiveis: ordens !== null,
   };
+}
+
+// Ordens de fabricação. Devolve null se a tabela ainda não existe (migração
+// 004 não rodada), para o resto do app continuar funcionando.
+async function carregarOrdens() {
+  const { data, error } = await supabase.from("ordens_fabricacao").select("*")
+    .order("criado_em", { ascending: false });
+  return error ? null : data;
+}
+
+// OF do coletor: a ligação nova (of_id) ou, nos cadastros antigos, o texto digitado.
+export const ofDoCaminhao = (dados, caminhao) => {
+  if (!caminhao) return null;
+  const of = caminhao.of_id ? dados.ordens?.find((o) => o.id === caminhao.of_id) : null;
+  if (of) return of;
+  return caminhao.os ? { id: null, numero: caminhao.os, cliente: caminhao.cliente } : null;
+};
+
+// Andamento de cada coletor: { [caminhao_id]: { total, concluidas } }
+export async function carregarProgresso() {
+  const { data, error } = await supabase.from("v_progresso_caminhoes").select("*");
+  if (error) return {};
+  const mapa = {};
+  for (const r of data) mapa[r.caminhao_id] = r;
+  return mapa;
 }
 
 // Etapas visíveis para um caminhão: as dele (cópias do padrão) e as antigas
@@ -151,6 +180,8 @@ function traduzir(error) {
     return new Error("Esta tarefa pertence a outro coletor. Encerre e entre no chassi certo.");
   if (m.includes("PADRAO_DE_FABRICA"))
     return new Error("Item do padrão de fábrica: é obrigatório e não pode ser excluído.");
+  if (m.includes("ordens_fabricacao_numero_key"))
+    return new Error("Já existe uma OF com esse número.");
   if (m.includes("SOMENTE_GESTAO"))
     return new Error("Apenas a gestão pode fazer isso.");
   // chave estrangeira: tentativa de apagar algo que tem histórico ligado
@@ -242,4 +273,5 @@ export const api = {
   caminhoes: tabela("caminhoes"),
   etapasPadrao: tabela("etapas_padrao"),
   tarefasPadrao: tabela("tarefas_padrao"),
+  ordens: tabela("ordens_fabricacao"),
 };
