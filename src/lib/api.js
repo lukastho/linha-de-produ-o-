@@ -147,9 +147,18 @@ export async function loginOperador(matricula, chassi, pin = null) {
   return data;
 }
 
-export async function loginAdmin(email, senha) {
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password: senha });
-  if (error) throw new Error("E-mail ou senha incorretos.");
+// O Supabase exige e-mail no login. A gestão digita só o usuário (ex.: lucastho)
+// e o app completa com este domínio interno, que ninguém precisa ver.
+const DOMINIO_USUARIOS = "montagem.local";
+
+export const emailDoUsuario = (usuario) => {
+  const u = usuario.trim().toLowerCase();
+  return u.includes("@") ? u : `${u}@${DOMINIO_USUARIOS}`;
+};
+
+export async function loginAdmin(usuario, senha) {
+  const { data, error } = await supabase.auth.signInWithPassword({ email: emailDoUsuario(usuario), password: senha });
+  if (error) throw new Error("Usuário ou senha incorretos.");
   const { data: perfil } = await supabase.from("usuarios").select("*")
     .eq("auth_user_id", data.user.id).maybeSingle();
   if (!perfil?.e_admin) {

@@ -110,7 +110,7 @@ export default function Login({ dados, entrar }) {
 }
 
 function SenhaAdmin({ entrar, voltar }) {
-  const [email, setEmail] = useState("");
+  const [usuario, setUsuario] = useState("");
   const [senha, setSenha] = useState("");
   const [erro, setErro] = useState("");
   const [ocupado, setOcupado] = useState(false);
@@ -119,7 +119,7 @@ function SenhaAdmin({ entrar, voltar }) {
     setOcupado(true);
     setErro("");
     try {
-      const perfil = await loginAdmin(email, senha);
+      const perfil = await loginAdmin(usuario, senha);
       entrar({ perfil: "admin", nome: perfil.nome, matricula: perfil.matricula, usuario_id: perfil.id });
     } catch (e) {
       setErro(e.message);
@@ -135,8 +135,9 @@ function SenhaAdmin({ entrar, voltar }) {
         A matrícula abre a porta; a senha é o que protege os cadastros da linha.
       </p>
 
-      <label className="mt-6 block text-xs uppercase tracking-widest text-zinc-500">E-mail</label>
-      <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username"
+      <label className="mt-6 block text-xs uppercase tracking-widest text-zinc-500">Usuário</label>
+      <input type="text" value={usuario} onChange={(e) => setUsuario(e.target.value)} autoComplete="username"
+        autoCapitalize="none" autoCorrect="off" spellCheck={false}
         className="mt-1 w-full rounded-lg border-2 border-zinc-300 px-4 py-3 outline-none" />
 
       <label className="mt-4 block text-xs uppercase tracking-widest text-zinc-500">Senha</label>
